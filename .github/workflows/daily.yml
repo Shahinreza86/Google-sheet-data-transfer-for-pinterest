@@ -2,8 +2,8 @@ name: Pinterest Automation Daily Run
 
 on:
   schedule:
-    - cron: '0 0 * * *' # প্রতিদিন বাংলাদেশ সময় সকাল ৬টায় চলবে
-  workflow_dispatch: # আপনি চাইলে নিজেও ম্যানুয়ালি রান করতে পারবেন
+    - cron: '0 0 * * *' 
+  workflow_dispatch: 
 
 jobs:
   build:
@@ -24,5 +24,5 @@ jobs:
       - name: Run automation script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GOOGLE_SERVICE_JSON: ${{ secrets.親 secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
         run: python main.py
