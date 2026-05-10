@@ -1,0 +1,28 @@
+name: Pinterest Automation Daily Run
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # প্রতিদিন বাংলাদেশ সময় সকাল ৬টায় চলবে
+  workflow_dispatch: # আপনি চাইলে নিজেও ম্যানুয়ালি রান করতে পারবেন
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install gspread oauth2client google-generativeai requests beautifulsoup4
+
+      - name: Run automation script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_SERVICE_JSON: ${{ secrets.親 secrets.GOOGLE_SERVICE_JSON }}
+        run: python main.py
