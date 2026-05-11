@@ -1,95 +1,47 @@
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import google.generativeai as genai
 import os
 import json
-import gspread
-import google.generativeai as genai
-from oauth2client.service_account import ServiceAccountCredentials
-import requests
-from bs4 import BeautifulSoup
 
-# ১. সেটিংস ও ক্রেডেনশিয়াল (GitHub Secrets থেকে আসবে)
-GOOGLE_SHEET_NAME = "Pinterest automatic pin post"
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-GOOGLE_SERVICE_JSON = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
-
-# আপনার ৫টি পিন্টারেস্ট বোর্ডের সঠিক নাম
-MY_BOARDS = [
-    "Smart Home Organization & Storage Ideas",
-    "Aesthetic Kitchen Decor & Interior Ideas",
-    "Smart Living Solutions & Home Tech",
-    "DIY Home Improvement & Life Hacks",
-    "Modern Kitchen Gadgets & Smart Tools"
-]
-
-# জেমিনি কনফিগারেশন - আপনার নির্দেশিত লেটেস্ট মডেল
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-flash-lite-latest') 
-
-# ২. গুগল শিট কানেক্ট করা
-scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/drive']
-creds = ServiceAccountCredentials.from_json_keyfile_dict(GOOGLE_SERVICE_JSON, scope)
+# ১. গুগল শিট কানেকশন
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds_dict = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
-sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+sheet = client.open("আপনার শিটের নাম").sheet1 # এখানে আপনার শিটের নাম লিখুন
 
-def get_ai_data(original_title):
-    # জেমিনিকে দিয়ে শর্ট নাম এবং বোর্ড সিলেকশন করা
-    prompt = f"""
-    Product: {original_title}
-    Boards: {', '.join(MY_BOARDS)}
-    
-    Task:
-    1. Create a very short, catchy Pinterest title (max 5 words).
-    2. Pick the most relevant board from the list above.
-    
-    Response format (JSON only):
-    {{"short_title": "...", "selected_board": "..."}}
-    """
-    response = model.generate_content(prompt)
-    # JSON ডাটা ক্লিন করা
-    clean_response = response.text.replace('```json', '').replace('```', '').strip()
-    return json.loads(clean_response)
+# ২. জেমিনি সেটআপ
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+model = genai.Model('gemini-pro')
 
-def run_automation():
-    # সার্চ টার্ম: হোম এবং কিচেন ট্রেন্ডিং প্রোডাক্ট
-    search_query = "trending smart home and kitchen gadgets 2026"
-    url = f"https://www.amazon.com/s?k={search_query.replace(' ', '+')}"
+def process_data():
+    # শিটের সব ডাটা নেওয়া
+    records = sheet.get_all_records()
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.content, "html.parser")
-    
-    # প্রথম ৫টি প্রোডাক্ট নিয়ে কাজ করবে
-    products = soup.find_all("div", {"data-component-type": "s-search-result"})[:5]
-
-    for product in products:
-        try:
-            full_name = product.h2.text.strip()
-            img_url = product.find("img")['src']
-            p_link = "https://www.amazon.com" + product.h2.a['href']
+    # ৭ নম্বর সারি থেকে চেক করা (ইনডেক্স অনুযায়ী)
+    for i, row in enumerate(records[5:], start=7): 
+        if not row['Product Name']: # যদি নাম ফাঁকা থাকে
+            # এখানে আপনার অ্যামাজন স্ক্র্যাপিং বা ডাটা সোর্স বসবে
+            # আপাতত জেমিনিকে দিয়ে ডেমো ডাটা প্রসেস করার লজিক:
             
-            # এআই দিয়ে প্রসেস করা (বোর্ড এবং শর্ট টাইটেল)
-            ai_info = get_ai_data(full_name)
+            product_name = "Amazon Large Product Name Here" # এটি স্ক্র্যাপার থেকে আসবে
             
-            # গুগল শিটে তথ্য পাঠানো (A, C, D, E, F, I কলাম)
-            # কলাম বিন্যাস: [A: Product Name, B: Category, C: Link, D: Image URL, E: Board Name, F: Post Status, G: Target, H: Date, I: Short Title]
-            row = [
-                full_name, 
-                "Home & Kitchen", 
-                p_link, 
-                img_url, 
-                ai_info['selected_board'], 
-                "Pending", 
-                "Homeowners", 
-                "2026-05-10", 
-                ai_info['short_title']
-            ]
-            sheet.append_row(row)
-            print(f"Added: {ai_info['short_title']} to {ai_info['selected_board']}")
-        except Exception as e:
-            print(f"Error: {e}")
-            continue
+            # জেমিনি দিয়ে শর্ট টাইটেল ও বোর্ড তৈরি
+            prompt = f"Product: {product_name}. Give me: 1. Short Title, 2. Suitable Pinterest Board Name. Format: Title | Board"
+            response = model.generate_content(prompt)
+            result = response.text.split('|')
+            
+            short_title = result[0].strip()
+            board_name = result[1].strip()
+
+            # শিটে ডাটা আপডেট করা
+            sheet.update_cell(i, 1, product_name) # Column A
+            sheet.update_cell(i, 5, board_name)   # Column E (Board)
+            sheet.update_cell(i, 9, short_title)  # Column I (Short Title)
+            sheet.update_cell(i, 10, "Ready")     # Column J (Status)
+
+            print(f"Row {i} updated successfully!")
 
 if __name__ == "__main__":
-    run_automation()
+    process_data()
