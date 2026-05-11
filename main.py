@@ -11,7 +11,7 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
 # আপনার শিটের আইডি এখানে বসান (এটি সব নামের সমস্যার সমাধান করবে)
-SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0ে" 
+SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0" 
 sheet = client.open_by_key(SHEET_ID).sheet1
 
 # ২. জেমিনি এআই সেটআপ (আপনার দেওয়া হুবহু নাম অনুযায়ী)
