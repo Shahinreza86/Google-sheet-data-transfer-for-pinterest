@@ -11,12 +11,13 @@ creds_dict = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
+# আপনার শিট আইডি
 SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0" 
 sheet = client.open_by_key(SHEET_ID).sheet1
 
-# ২. জেমিনি সেটআপ
+# ২. জেমিনি সেটআপ (সর্বোচ্চ শক্তির জন্য প্রো ভার্সন)
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
+model = genai.GenerativeModel('gemini-1.5-pro')
 
 BOARDS = [
     "Modern Kitchen Gadgets & Smart Tools",
@@ -27,21 +28,26 @@ BOARDS = [
 ]
 
 def run_automation():
-    print("Finding the first empty row...")
-    all_values = sheet.get_all_values()
-    start_row = len(all_values) + 1 # প্রথম ফাঁকা সারি
+    print("Scanning for the first empty row...")
+    # শিটের কলাম A চেক করে প্রথম ফাঁকা রো বের করা
+    col_a = sheet.col_values(1)
+    start_row = len(col_a) + 1
     
-    # জেমিনিকে দিয়ে ১টি রিয়েল প্রোডাক্ট ডাটা জেনারেট করা
+    print(f"Targeting Row {start_row}...")
+
+    # ৩. জেমিনিকে দিয়ে রিয়েল ডাটা বের করার প্রম্পট
     prompt = f"""
-    Find 1 trending and real Amazon product for the niche: 'Smart Kitchen & Home Organization'.
-    Rules:
-    - Must be a real product sold on Amazon.
-    - Provide a working Amazon search link for that specific product.
-    - Select one board from: {BOARDS}
-    - Provide a high-quality direct image URL (use Unsplash or verified product image hosts).
-    
-    Format EXACTLY like this: 
-    ProductName | AmazonLink | PinterestTitle | BoardName | ImageURL
+    Act as an expert Amazon Product Researcher. 
+    Find 1 trending and real Amazon product in the 'Smart Kitchen & Home Gadgets' niche.
+    Requirement:
+    1. Product Name: Clean and short.
+    2. Amazon URL: A direct working product link.
+    3. Pinterest Title: Catchy (max 50 chars).
+    4. Board: Select the best one from {BOARDS}.
+    5. Image URL: A direct high-quality image link of that product.
+
+    Response Format (Strictly): 
+    Name | Link | Title | Board | Image
     """
     
     try:
@@ -55,23 +61,28 @@ def run_automation():
             p_board = data[3].strip()
             p_image = data[4].strip()
 
-            print(f"Updating Row {start_row} with {p_name}...")
-
-            # কলাম অনুযায়ী ডাটা বসানো এবং লিঙ্ককে ক্লিকযোগ্য (Blue) করা
-            # A: Product Name, C: Product Link, D: Image URL, E: Board Name, F: Status, I: Title
+            # ৪. গুগল শিটে ডাটা আপডেট (HYPERLINK সহ)
+            # Column A: Name
             sheet.update_cell(start_row, 1, p_name)
             
-            # লিঙ্ক নীল এবং ক্লিকযোগ্য করার জন্য HYPERLINK ফর্মুলা ব্যবহার
-            sheet.update_acell(f'C{start_row}', f'=HYPERLINK("{p_link}", "Click to View")')
+            # Column C: Product Link (Blue & Clickable)
+            sheet.update_acell(f'C{start_row}', f'=HYPERLINK("{p_link}", "Check Product")')
+            
+            # Column D: Image URL (Blue & Clickable)
             sheet.update_acell(f'D{start_row}', f'=HYPERLINK("{p_image}", "View Image")')
             
+            # Column E: Board
             sheet.update_cell(start_row, 5, p_board)
+            
+            # Column F: Status
             sheet.update_cell(start_row, 6, "Ready")
+            
+            # Column I: Short Title
             sheet.update_cell(start_row, 9, p_title)
 
-            print(f"Success! Row {start_row} is now filled.")
+            print(f"Successfully updated Row {start_row}")
         else:
-            print("Gemini provided incomplete data. Retrying...")
+            print("AI response format error. Retrying...")
 
     except Exception as e:
         print(f"Error: {e}")
