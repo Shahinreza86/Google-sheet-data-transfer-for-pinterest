@@ -3,8 +3,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 import google.generativeai as genai
 import os
 import json
-import requests
-from bs4 import BeautifulSoup
 import time
 
 # ১. কানেকশন ও শিট সেটআপ
@@ -18,7 +16,7 @@ sheet = client.open_by_key(SHEET_ID).sheet1
 
 # ২. জেমিনি সেটআপ
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel('gemini-flash-lite-latest')
+model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 BOARDS = [
     "Modern Kitchen Gadgets & Smart Tools",
@@ -28,73 +26,55 @@ BOARDS = [
     "Smart Home Organization & Storage Ideas"
 ]
 
-def get_amazon_data():
-    # অ্যামাজন থেকে ডাটা ডাইরেক্টলি স্ক্র্যাপ করার জন্য উন্নত প্রক্সি মেথড
-    search_url = "https://www.amazon.com/s?k=trending+smart+kitchen+gadgets+2026"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/"
-    }
+def run_automation():
+    print("Finding the first empty row...")
+    all_values = sheet.get_all_values()
+    start_row = len(all_values) + 1 # প্রথম ফাঁকা সারি
+    
+    # জেমিনিকে দিয়ে ১টি রিয়েল প্রোডাক্ট ডাটা জেনারেট করা
+    prompt = f"""
+    Find 1 trending and real Amazon product for the niche: 'Smart Kitchen & Home Organization'.
+    Rules:
+    - Must be a real product sold on Amazon.
+    - Provide a working Amazon search link for that specific product.
+    - Select one board from: {BOARDS}
+    - Provide a high-quality direct image URL (use Unsplash or verified product image hosts).
+    
+    Format EXACTLY like this: 
+    ProductName | AmazonLink | PinterestTitle | BoardName | ImageURL
+    """
     
     try:
-        response = requests.get(search_url, headers=headers, timeout=20)
-        soup = BeautifulSoup(response.content, "html.parser")
-        links = []
-        for item in soup.select(".s-result-item[data-component-type='s-search-result']"):
-            link_tag = item.select_one("h2 a")
-            if link_tag:
-                full_link = "https://www.amazon.com" + link_tag['href'].split('?')[0]
-                links.append(full_link)
-        return list(set(links))
-    except:
-        return []
+        response = model.generate_content(prompt)
+        data = response.text.strip().split('|')
+        
+        if len(data) >= 5:
+            p_name = data[0].strip()
+            p_link = data[1].strip()
+            p_title = data[2].strip()
+            p_board = data[3].strip()
+            p_image = data[4].strip()
 
-def run_automation():
-    links = get_amazon_data()
-    if not links:
-        print("Amazon detection issues. Using Gemini for real product discovery...")
-        # যদি স্ক্র্যাপিং ফেইল করে, জেমিনি তার নলেজ থেকে আসল রিয়েল-লাইফ প্রোডাক্ট দিবে
-        prompt = f"Give me 5 real trending Amazon product links for {BOARDS[0]}. Format: Link only."
-        links = model.generate_content(prompt).text.split('\n')
+            print(f"Updating Row {start_row} with {p_name}...")
 
-    # ৩. প্রথম ফাঁকা রো (Empty Row) খুঁজে বের করা
-    all_values = sheet.get_all_values()
-    start_row = len(all_values) + 1 # যেখানে ডাটা শেষ, তার পরের লাইন
-    
-    print(f"Starting from empty row: {start_row}")
-    link_idx = 0
-    
-    for i in range(start_row, start_row + 5): # একবারে ৫টি করে ঘর পূরণ করবে
-        if link_idx < len(links):
-            target_url = links[link_idx].strip()
-            if "http" not in target_url: continue
+            # কলাম অনুযায়ী ডাটা বসানো এবং লিঙ্ককে ক্লিকযোগ্য (Blue) করা
+            # A: Product Name, C: Product Link, D: Image URL, E: Board Name, F: Status, I: Title
+            sheet.update_cell(start_row, 1, p_name)
             
-            print(f"Processing Row {i}...")
+            # লিঙ্ক নীল এবং ক্লিকযোগ্য করার জন্য HYPERLINK ফর্মুলা ব্যবহার
+            sheet.update_acell(f'C{start_row}', f'=HYPERLINK("{p_link}", "Click to View")')
+            sheet.update_acell(f'D{start_row}', f'=HYPERLINK("{p_image}", "View Image")')
             
-            prompt = f"""
-            Analyze this product link: {target_url}
-            Provide: 1. Clean Name, 2. Pinterest Title (Max 50 chars), 3. Select Board from: {BOARDS}, 4. Direct Image URL.
-            Format: Name | Title | Board | Image
-            """
-            
-            try:
-                response = model.generate_content(prompt)
-                res = response.text.split('|')
-                
-                if len(res) >= 4:
-                    sheet.update_cell(i, 1, res[0].strip()) # A: Product Name
-                    sheet.update_cell(i, 3, target_url)     # C: Product Link
-                    sheet.update_cell(i, 4, res[3].strip()) # D: Image URL
-                    sheet.update_cell(i, 5, res[2].strip()) # E: Board Name
-                    sheet.update_cell(i, 6, "Ready")        # F: Post Status
-                    sheet.update_cell(i, 9, res[1].strip()) # I: Short Title
-                    
-                    print(f"Row {i} updated successfully!")
-                    link_idx += 1
-                    time.sleep(2)
-            except Exception as e:
-                print(f"Error at row {i}: {e}")
+            sheet.update_cell(start_row, 5, p_board)
+            sheet.update_cell(start_row, 6, "Ready")
+            sheet.update_cell(start_row, 9, p_title)
+
+            print(f"Success! Row {start_row} is now filled.")
+        else:
+            print("Gemini provided incomplete data. Retrying...")
+
+    except Exception as e:
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
     run_automation()
