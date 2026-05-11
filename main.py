@@ -11,7 +11,7 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
 # আপনার শিটের নাম এখানে হুবহু পিন্টারেস্ট থেকে নেওয়া (স্পেসসহ)
-sheet = client.open("Pinterest automatic pin post ").sheet1
+sheet = client.open("Pinterest automatic pin post").sheet1
 
 # ২. জেমিনি এআই সেটআপ (নতুন ভার্সন অনুযায়ী সংশোধিত)
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
