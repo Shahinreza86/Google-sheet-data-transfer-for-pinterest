@@ -3,6 +3,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 import google.generativeai as genai
 import os
 import json
+import requests
+from bs4 import BeautifulSoup
 import time
 
 # ১. কানেকশন ও শিট সেটআপ
@@ -26,46 +28,73 @@ BOARDS = [
     "Smart Home Organization & Storage Ideas"
 ]
 
-def process_automation():
-    print("Generating trending product data using Gemini...")
-    
-    # জেমিনিকে বলা হচ্ছে ৫টি প্রোডাক্টের ডাটা তৈরি করতে
-    prompt = f"""
-    Generate 5 trending Amazon products for the niche: 'Smart Living & Kitchen Organization'.
-    For each product, provide:
-    1. Product Name
-    2. A search link for Amazon (e.g., https://www.amazon.com/s?k=product+name)
-    3. A Pinterest Title (Max 50 chars)
-    4. One board from this list: {BOARDS}
-    5. A placeholder image URL from Unsplash related to kitchen/home.
-    
-    Format: Name | SearchLink | Title | Board | Image
-    Separate each product with a new line.
-    """
+def get_amazon_data():
+    # অ্যামাজন থেকে ডাটা ডাইরেক্টলি স্ক্র্যাপ করার জন্য উন্নত প্রক্সি মেথড
+    search_url = "https://www.amazon.com/s?k=trending+smart+kitchen+gadgets+2026"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/"
+    }
     
     try:
-        response = model.generate_content(prompt)
-        product_list = response.text.strip().split('\n')
-        
-        row_to_fill = 8 # ৮ নম্বর সারি থেকে শুরু
-        
-        for item in product_list:
-            res = item.split('|')
-            if len(res) >= 5:
-                # শিটে ডাটা ইনপুট দেওয়া (A, C, D, E, F, I কলাম)
-                sheet.update_cell(row_to_fill, 1, res[0].strip()) # A: Product Name
-                sheet.update_cell(row_to_fill, 3, res[1].strip()) # C: Product Link (Search Link)
-                sheet.update_cell(row_to_fill, 4, res[4].strip()) # D: Image URL
-                sheet.update_cell(row_to_fill, 5, res[3].strip()) # E: Board Name
-                sheet.update_cell(row_to_fill, 6, "Ready")        # F: Post Status
-                sheet.update_cell(row_to_fill, 9, res[2].strip()) # I: Short Title
+        response = requests.get(search_url, headers=headers, timeout=20)
+        soup = BeautifulSoup(response.content, "html.parser")
+        links = []
+        for item in soup.select(".s-result-item[data-component-type='s-search-result']"):
+            link_tag = item.select_one("h2 a")
+            if link_tag:
+                full_link = "https://www.amazon.com" + link_tag['href'].split('?')[0]
+                links.append(full_link)
+        return list(set(links))
+    except:
+        return []
+
+def run_automation():
+    links = get_amazon_data()
+    if not links:
+        print("Amazon detection issues. Using Gemini for real product discovery...")
+        # যদি স্ক্র্যাপিং ফেইল করে, জেমিনি তার নলেজ থেকে আসল রিয়েল-লাইফ প্রোডাক্ট দিবে
+        prompt = f"Give me 5 real trending Amazon product links for {BOARDS[0]}. Format: Link only."
+        links = model.generate_content(prompt).text.split('\n')
+
+    # ৩. প্রথম ফাঁকা রো (Empty Row) খুঁজে বের করা
+    all_values = sheet.get_all_values()
+    start_row = len(all_values) + 1 # যেখানে ডাটা শেষ, তার পরের লাইন
+    
+    print(f"Starting from empty row: {start_row}")
+    link_idx = 0
+    
+    for i in range(start_row, start_row + 5): # একবারে ৫টি করে ঘর পূরণ করবে
+        if link_idx < len(links):
+            target_url = links[link_idx].strip()
+            if "http" not in target_url: continue
+            
+            print(f"Processing Row {i}...")
+            
+            prompt = f"""
+            Analyze this product link: {target_url}
+            Provide: 1. Clean Name, 2. Pinterest Title (Max 50 chars), 3. Select Board from: {BOARDS}, 4. Direct Image URL.
+            Format: Name | Title | Board | Image
+            """
+            
+            try:
+                response = model.generate_content(prompt)
+                res = response.text.split('|')
                 
-                print(f"Row {row_to_fill} updated with: {res[0].strip()}")
-                row_to_fill += 1
-                time.sleep(2) # API লিমিট এড়াতে
-                
-    except Exception as e:
-        print(f"Error: {e}")
+                if len(res) >= 4:
+                    sheet.update_cell(i, 1, res[0].strip()) # A: Product Name
+                    sheet.update_cell(i, 3, target_url)     # C: Product Link
+                    sheet.update_cell(i, 4, res[3].strip()) # D: Image URL
+                    sheet.update_cell(i, 5, res[2].strip()) # E: Board Name
+                    sheet.update_cell(i, 6, "Ready")        # F: Post Status
+                    sheet.update_cell(i, 9, res[1].strip()) # I: Short Title
+                    
+                    print(f"Row {i} updated successfully!")
+                    link_idx += 1
+                    time.sleep(2)
+            except Exception as e:
+                print(f"Error at row {i}: {e}")
 
 if __name__ == "__main__":
-    process_automation()
+    run_automation()
