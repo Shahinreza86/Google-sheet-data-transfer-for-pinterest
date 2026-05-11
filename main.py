@@ -9,7 +9,7 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 creds_dict = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
-sheet = client.open("Pinterest automatic pin post").sheet1 # এখানে আপনার শিটের নাম লিখুন
+sheet = client.open("Pinterest automatic pin post ").sheet1 # এখানে আপনার শিটের নাম লিখুন
 
 # ২. জেমিনি সেটআপ
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
