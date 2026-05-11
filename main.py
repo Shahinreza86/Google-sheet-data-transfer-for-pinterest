@@ -4,14 +4,15 @@ import google.generativeai as genai
 import os
 import json
 
-# ১. গুগল শিট কানেকশন সেটআপ
+# ১. গুগল শিট কানেকশন সেটআপ (আইডি দিয়ে)
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds_dict = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# শিটের নাম (সুনিশ্চিত করুন নামের শেষে স্পেস আছে কি না)
-sheet = client.open("Pinterest automatic pin post ").sheet1
+# আপনার শিটের আইডি এখানে বসান (এটি সব নামের সমস্যার সমাধান করবে)
+SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0ে" 
+sheet = client.open_by_key(SHEET_ID).sheet1
 
 # ২. জেমিনি এআই সেটআপ (আপনার দেওয়া হুবহু নাম অনুযায়ী)
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
@@ -34,7 +35,7 @@ def process_data():
                 
                 result = response.text.split('|')
                 if len(result) >= 3:
-                    # শিটে ডাটা আপডেট
+                    # শিটে ডাটা আপডেট (A, E, I, F কলাম)
                     sheet.update_cell(i, 1, result[0].strip()) # Product Name
                     sheet.update_cell(i, 5, result[2].strip()) # Board Name
                     sheet.update_cell(i, 9, result[1].strip()) # Short Title
