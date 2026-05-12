@@ -1,9 +1,9 @@
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import google.generativeai as genai
 import os
 import json
 import re
+from groq import Groq
 
 # ১. গুগল শিট কানেকশন
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -17,50 +17,47 @@ try:
 except Exception as e:
     print(f"Sheet Error: {str(e)}")
 
-# ২. জেমিনি অটোমেশন (লেটেস্ট মডেল এবং গুগল সার্চ লজিক)
+# ২. Groq অটোমেশন (Llama 3 70B মডেল ব্যবহার করা হয়েছে)
 try:
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    # গিটহাবে GROQ_API_KEY নামে সিক্রেট অ্যাড করে নেবেন
+    client_groq = Groq(api_key=os.environ.get("GROQ_API_KEY"))
     
-    # স্ক্রিনশট image_d1fbb4.png অনুযায়ী লেটেস্ট মডেল নাম
-    model = genai.GenerativeModel(
-        model_name='gemini-3.1-flash-lite',
-        tools=[{"google_search_retrieval": {}}]
-    )
-
-    # ডুপ্লিকেট চেক করতে শিট থেকে ডাটা নেওয়া
     existing_products = sheet.col_values(1)
 
     prompt = f"""
-    Find 1 trending Amazon product for Home/Kitchen today using Google Search.
-    Check if it matches these boards:
-    - Modern Kitchen Gadgets & Smart Tools
-    - DIY Home Improvement & Life Hacks
-    - Smart Living Solutions & Home Tech
-    - Aesthetic Kitchen Decor & Interior Ideas
-    - Smart Home Organization & Storage Ideas
+    Suggest 1 REAL trending Amazon product for Home/Kitchen organization. 
+    Exclude: {existing_products[-10:]}.
+    
+    Pick 1 board:
+    1. Modern Kitchen Gadgets & Smart Tools
+    2. DIY Home Improvement & Life Hacks
+    3. Smart Living Solutions & Home Tech
+    4. Aesthetic Kitchen Decor & Interior Ideas
+    5. Smart Home Organization & Storage Ideas
 
-    Exclude: {existing_products[-15:]}.
-    You MUST provide a working Amazon link and a direct image link from media-amazon.com.
-    Return ONLY JSON:
+    Return ONLY a JSON object with a valid Amazon link and direct image URL:
     {{"full_name": "...", "short_title": "...", "link": "...", "image": "...", "board": "..."}}
     """
     
-    response = model.generate_content(prompt)
+    chat_completion = client_groq.chat.completions.create(
+        messages=[{"role": "user", "content": prompt}],
+        model="llama3-70b-8192",
+    )
     
-    # এরর ফ্রি ডাটা এক্সট্রাকশন
-    match = re.search(r'\{.*\}', response.text, re.DOTALL)
+    response_text = chat_completion.choices[0].message.content
+    match = re.search(r'\{.*\}', response_text, re.DOTALL)
     product = json.loads(match.group())
     
-    # ৩. শিটে ডাটা এন্ট্রি
+    # ৩. শিটে ডাটা বসানো
     row_num = len(existing_products) + 1
-    sheet.update_cell(row_num, 1, product["full_name"])      # A: Product Name
-    sheet.update_cell(row_num, 3, product["link"])           # C: Product Link
-    sheet.update_cell(row_num, 4, product["image"])          # D: Image URL
-    sheet.update_cell(row_num, 5, product["board"])         # E: Board Name
-    sheet.update_cell(row_num, 6, "Ready")                  # F: Status
-    sheet.update_cell(row_num, 9, product["short_title"])   # I: Short Title
+    sheet.update_cell(row_num, 1, product["full_name"])      # A
+    sheet.update_cell(row_num, 3, product["link"])           # C
+    sheet.update_cell(row_num, 4, product["image"])          # D
+    sheet.update_cell(row_num, 5, product["board"])         # E
+    sheet.update_cell(row_num, 6, "Ready")                  # F
+    sheet.update_cell(row_num, 9, product["short_title"])   # I
 
-    print(f"সফলভাবে ডাটা যোগ হয়েছে রো নম্বর: {row_num}")
+    print(f"সফল! Groq দিয়ে নতুন প্রোডাক্ট যোগ হয়েছে।")
 
 except Exception as e:
-    print(f"Final Error: {str(e)}")
+    print(f"Groq Error: {str(e)}")
