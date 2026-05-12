@@ -1,82 +1,48 @@
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import google.generativeai as genai
 import os
 import json
-import re
-from groq import Groq
 
-# ১. গুগল শিট কানেকশন সেটআপ
+# ১. গুগল শিট কানেকশন সেটআপ (আইডি দিয়ে)
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-try:
-    # গিটহাব সিক্রেটস থেকে ক্রেডেনশিয়াল নেওয়া
-    creds_json = os.environ.get("GOOGLE_SERVICE_JSON")
-    creds_dict = json.loads(creds_json)
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    
-    # আপনার শিট আইডি
-    SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0" 
-    sheet = client.open_by_key(SHEET_ID).sheet1
-except Exception as e:
-    print(f"Sheet Connection Error: {str(e)}")
+creds_dict = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+client = gspread.authorize(creds)
 
-# ২. Groq AI অটোমেশন (Llama 3 70B মডেল)
-try:
-    # গিটহাব সিক্রেট থেকে GROQ_API_KEY নেওয়া
-    client_groq = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-    
-    # ডুপ্লিকেট এড়াতে শিটের প্রথম কলামের ডাটা নেওয়া
-    existing_products = sheet.col_values(1)
+# আপনার শিটের আইডি এখানে বসান (এটি সব নামের সমস্যার সমাধান করবে)
+SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0" 
+sheet = client.open_by_key(SHEET_ID).sheet1
 
-    prompt = f"""
-    Suggest 1 REAL trending Amazon product for "Home & Kitchen Organization" today.
-    Make sure it is highly aesthetic and practical.
-    
-    Exclude these recent items: {existing_products[-10:]}
+# ২. জেমিনি এআই সেটআপ (আপনার দেওয়া হুবহু নাম অনুযায়ী)
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+model = genai.GenerativeModel('gemini-flash-lite-latest')
 
-    Pick one of these Pinterest boards:
-    - Modern Kitchen Gadgets & Smart Tools
-    - DIY Home Improvement & Life Hacks
-    - Smart Living Solutions & Home Tech
-    - Aesthetic Kitchen Decor & Interior Ideas
-    - Smart Home Organization & Storage Ideas
-
-    Response must be ONLY JSON format:
-    {{
-      "full_name": "Product Full Title",
-      "short_title": "Clean Short Name",
-      "link": "Amazon Product URL",
-      "image": "Direct Media-Amazon Image URL",
-      "board": "Selected Board Name"
-    }}
-    """
+def process_data():
+    data = sheet.get_all_values()
     
-    # এআই থেকে রেসপন্স জেনারেট করা
-    chat_completion = client_groq.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
-        model="llama3-70b-8192",
-        temperature=0.7
-    )
-    
-    response_text = chat_completion.choices[0].message.content
-    
-    # JSON ডাটা ক্লিন করে বের করা
-    match = re.search(r'\{.*\}', response_text, re.DOTALL)
-    if match:
-        product = json.loads(match.group())
-        
-        # ৩. গুগল শিটে ডাটা আপডেট করা
-        row_num = len(existing_products) + 1
-        sheet.update_cell(row_num, 1, product["full_name"])      # কলাম A
-        sheet.update_cell(row_num, 3, product["link"])           # কলাম C
-        sheet.update_cell(row_num, 4, product["image"])          # কলাম D
-        sheet.update_cell(row_num, 5, product["board"])         # কলাম E
-        sheet.update_cell(row_num, 6, "Ready")                  # কলাম F
-        sheet.update_cell(row_num, 9, product["short_title"])   # কলাম I
+    # ৭ নম্বর সারি থেকে চেক করা শুরু
+    for i, row in enumerate(data[6:], start=7): 
+        # কলাম C-তে লিঙ্ক থাকতে হবে এবং কলাম A ফাঁকা থাকতে হবে
+        if len(row) > 2 and row[2] and not row[0]:
+            product_link = row[2]
+            print(f"Processing row {i}...")
+            
+            try:
+                # জেমিনিকে দিয়ে ডাটা প্রসেস করা
+                prompt = f"From this link: {product_link}, provide: 1. Product Full Name, 2. Short Title (max 50 chars), 3. Pinterest Board. Format: Name | Title | Board"
+                response = model.generate_content(prompt)
+                
+                result = response.text.split('|')
+                if len(result) >= 3:
+                    # শিটে ডাটা আপডেট (A, E, I, F কলাম)
+                    sheet.update_cell(i, 1, result[0].strip()) # Product Name
+                    sheet.update_cell(i, 5, result[2].strip()) # Board Name
+                    sheet.update_cell(i, 9, result[1].strip()) # Short Title
+                    sheet.update_cell(i, 6, "Ready")            # Post Status
+                    print(f"Row {i} updated successfully!")
+            except Exception as e:
+                print(f"Error in row {i}: {e}")
 
-        print(f"সফল! রো নম্বর {row_num}-এ ডাটা সেভ হয়েছে।")
-    else:
-        print("AI থেকে সঠিক ফরম্যাটে ডাটা পাওয়া যায়নি।")
-
-except Exception as e:
-    print(f"Groq API Error: {str(e)}")
+if __name__ == "__main__":
+    process_data()
