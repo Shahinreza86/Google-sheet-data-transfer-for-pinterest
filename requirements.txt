@@ -1,0 +1,4 @@
+groq
+gspread
+oauth2client
+google-generativeai
