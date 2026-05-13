@@ -3,6 +3,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import google.generativeai as genai
 import os
 import json
+import time
 
 # ১. গুগল শিট কানেকশন সেটআপ
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -14,11 +15,11 @@ client = gspread.authorize(creds)
 SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0"
 sheet = client.open_by_key(SHEET_ID).sheet1
 
-# ২. জেমিনি এআই সেটআপ (Gemini Flash Lite)
+# ২. জেমিনি এআই সেটআপ (সবচেয়ে শক্তিশালী মডেল ব্যবহার করছি)
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel('gemini-flash-lite-latest')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-# আপনার নির্ধারিত পিন্টারেস্ট বোর্ড লিস্ট
+# আপনার নির্ধারিত বোর্ড লিস্ট
 BOARDS = [
     "Modern Kitchen Gadgets & Smart Tools",
     "DIY Home Improvement & Life Hacks",
@@ -28,39 +29,53 @@ BOARDS = [
 ]
 
 def process_data():
-    data = sheet.get_all_values()
+    all_rows = sheet.get_all_values()
     
-    # ৭ নম্বর সারি থেকে চেক করা শুরু
-    for i, row in enumerate(data[6:], start=7): 
-        # কলাম C-তে লিঙ্ক থাকতে হবে এবং কলাম A ফাঁকা থাকতে হবে
-        if len(row) > 2 and row[2] and not row[0]:
+    # সারি নম্বর ২ থেকে শুরু (হেডার বাদ দিয়ে)
+    for i, row in enumerate(all_rows[1:], start=2):
+        # শর্ত: কলাম C (index 2)-তে লিঙ্ক আছে কিন্তু কলাম A (index 0) ফাঁকা
+        if len(row) > 2 and row[2].strip() != "" and (len(row) == 0 or row[0].strip() == ""):
             product_link = row[2]
-            print(f"Processing row {i}...")
+            print(f"--- জেমিনি এখন ডাটা খুঁজছে সারি {i}-এর জন্য ---")
             
             try:
-                # জেমিনিকে দিয়ে ডাটা প্রসেস করা এবং নির্দিষ্ট বোর্ড থেকে বাছাই করা
+                # জেমিনিকে কমান্ড দেওয়া আমাজন থেকে সব তথ্য আনার জন্য
                 prompt = f"""
-                Analyze the context of this product link: {product_link}
-                1. Provide Product Full Name.
-                2. Provide a Short Title (max 50 chars).
-                3. Strictly pick the most relevant board from this list: {BOARDS}
+                Visit/Analyze this Amazon link: {product_link}
+                Extract the following details precisely:
+                1. Product Full Name (Long title).
+                2. Product Image URL (The main high-quality image link).
+                3. Short Title (Catchy, under 50 chars).
+                4. Select the most relevant board from this list: {BOARDS}
                 
-                Format the output exactly like this: Name | Title | Board
+                Format the answer exactly like this:
+                NAME: [product name]
+                IMAGE: [image url]
+                TITLE: [short title]
+                BOARD: [board name]
                 """
                 
                 response = model.generate_content(prompt)
-                result = response.text.split('|')
+                text = response.text
                 
-                if len(result) >= 3:
-                    # শিটে ডাটা আপডেট (A, E, I, F কলাম)
-                    sheet.update_cell(i, 1, result[0].strip()) # A: Product Name
-                    sheet.update_cell(i, 5, result[2].strip()) # E: Board Name (আপনার লিস্ট থেকে)
-                    sheet.update_cell(i, 9, result[1].strip()) # I: Short Title
-                    sheet.update_cell(i, 6, "Ready")           # F: Status
-                    print(f"Row {i} updated with Board: {result[2].strip()}")
+                # ডাটা আলাদা করা
+                p_name = text.split("NAME:")[1].split("IMAGE:")[0].strip()
+                p_image = text.split("IMAGE:")[1].split("TITLE:")[0].strip()
+                p_title = text.split("TITLE:")[1].split("BOARD:")[0].strip()
+                p_board = text.split("BOARD:")[1].strip()
+
+                # শিটে কলাম অনুযায়ী ডাটা পাঠানো (আপনার ইমেজ অনুযায়ী কলাম ম্যাপিং)
+                sheet.update_cell(i, 1, p_name)  # A: Product Name
+                sheet.update_cell(i, 4, p_image) # D: Image URL
+                sheet.update_cell(i, 5, p_board) # E: Board Name
+                sheet.update_cell(i, 9, p_title) # I: Short Title
+                sheet.update_cell(i, 6, "Ready") # F: Post Status
                 
+                print(f"সফলভাবে সারি {i} আপডেট হয়েছে!")
+                time.sleep(2) #API রক্ষা করতে বিরতি
+
             except Exception as e:
-                print(f"Error in row {i}: {e}")
+                print(f"সারি {i}-তে সমস্যা হয়েছে: {e}")
 
 if __name__ == "__main__":
     process_data()
