@@ -4,19 +4,28 @@ import google.generativeai as genai
 import os
 import json
 
-# ১. গুগল শিট কানেকশন সেটআপ (আইডি দিয়ে)
+# ১. গুগল শিট কানেকশন সেটআপ
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds_dict = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# আপনার শিটের আইডি এখানে বসান (এটি সব নামের সমস্যার সমাধান করবে)
-SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0" 
+# আপনার শিটের আইডি
+SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0"
 sheet = client.open_by_key(SHEET_ID).sheet1
 
-# ২. জেমিনি এআই সেটআপ (আপনার দেওয়া হুবহু নাম অনুযায়ী)
+# ২. জেমিনি এআই সেটআপ (Gemini Flash Lite)
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 model = genai.GenerativeModel('gemini-flash-lite-latest')
+
+# আপনার নির্ধারিত পিন্টারেস্ট বোর্ড লিস্ট
+BOARDS = [
+    "Modern Kitchen Gadgets & Smart Tools",
+    "DIY Home Improvement & Life Hacks",
+    "Smart Living Solutions & Home Tech",
+    "Aesthetic Kitchen Decor & Interior Ideas",
+    "Smart Home Organization & Storage Ideas"
+]
 
 def process_data():
     data = sheet.get_all_values()
@@ -29,18 +38,27 @@ def process_data():
             print(f"Processing row {i}...")
             
             try:
-                # জেমিনিকে দিয়ে ডাটা প্রসেস করা
-                prompt = f"From this link: {product_link}, provide: 1. Product Full Name, 2. Short Title (max 50 chars), 3. Pinterest Board. Format: Name | Title | Board"
-                response = model.generate_content(prompt)
+                # জেমিনিকে দিয়ে ডাটা প্রসেস করা এবং নির্দিষ্ট বোর্ড থেকে বাছাই করা
+                prompt = f"""
+                Analyze the context of this product link: {product_link}
+                1. Provide Product Full Name.
+                2. Provide a Short Title (max 50 chars).
+                3. Strictly pick the most relevant board from this list: {BOARDS}
                 
+                Format the output exactly like this: Name | Title | Board
+                """
+                
+                response = model.generate_content(prompt)
                 result = response.text.split('|')
+                
                 if len(result) >= 3:
                     # শিটে ডাটা আপডেট (A, E, I, F কলাম)
-                    sheet.update_cell(i, 1, result[0].strip()) # Product Name
-                    sheet.update_cell(i, 5, result[2].strip()) # Board Name
-                    sheet.update_cell(i, 9, result[1].strip()) # Short Title
-                    sheet.update_cell(i, 6, "Ready")            # Post Status
-                    print(f"Row {i} updated successfully!")
+                    sheet.update_cell(i, 1, result[0].strip()) # A: Product Name
+                    sheet.update_cell(i, 5, result[2].strip()) # E: Board Name (আপনার লিস্ট থেকে)
+                    sheet.update_cell(i, 9, result[1].strip()) # I: Short Title
+                    sheet.update_cell(i, 6, "Ready")           # F: Status
+                    print(f"Row {i} updated with Board: {result[2].strip()}")
+                
             except Exception as e:
                 print(f"Error in row {i}: {e}")
 
