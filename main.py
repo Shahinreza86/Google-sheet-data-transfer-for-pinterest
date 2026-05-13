@@ -4,19 +4,21 @@ import google.generativeai as genai
 import os
 import json
 import time
-import requests
-from bs4 import BeautifulSoup
 
-# ১. গুগল শিট কানেকশন
+# ১. গুগল শিট কানেকশন সেটআপ
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
+try:
+    creds_dict = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+except Exception as e:
+    print(f"Credentials Error: {e}")
+    exit()
 
 SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0"
 sheet = client.open_by_key(SHEET_ID).sheet1
 
-# ২. জেমিনি সেটআপ
+# ২. জেমিনি এআই সেটআপ
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 model = genai.GenerativeModel('gemini-flash-lite-latest')
 
@@ -28,53 +30,53 @@ BOARDS = [
     "Smart Home Organization & Storage Ideas"
 ]
 
-def get_amazon_info(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.content, 'html.parser')
-        title = soup.find(id="productTitle").get_text().strip() if soup.find(id="productTitle") else "Product"
-        # ইমেজ খোঁজা
-        img_tag = soup.find(id="landingImage") or soup.find(id="imgBlkFront")
-        image_url = img_tag.get('src') if img_tag else ""
-        return title, image_url
-    except:
-        return None, None
-
 def process_data():
+    # শিটের সব ডাটা রিড করা
     all_rows = sheet.get_all_values()
-    for i, row in enumerate(all_rows[1:], start=2):
-        # কলাম C-তে লিঙ্ক আছে কিন্তু কলাম A-তে নাম নেই
-        if len(row) > 2 and row[2].strip() and (len(row) < 1 or not row[0].strip()):
-            link = row[2].strip()
-            print(f"সারি {i} প্রসেস হচ্ছে...")
-            
-            # প্রথমে আমাজন থেকে ডিরেক্ট ডাটা আনার চেষ্টা (কোটা বাঁচাবে)
-            raw_title, image_url = get_amazon_info(link)
-            
-            if raw_title:
-                try:
-                    # জেমিনি শুধু বোর্ড সিলেক্ট আর টাইটেল অপ্টিমাইজ করবে
-                    prompt = f"Product: {raw_title}. Boards: {BOARDS}. Provide: 1. Catchy Short Title (max 50 chars), 2. One board from list. Format: Title | Board"
-                    response = model.generate_content(prompt)
-                    parts = response.text.split('|')
-                    
-                    short_title = parts[0].strip() if len(parts) > 0 else raw_title[:50]
-                    board_name = parts[1].strip() if len(parts) > 1 else BOARDS[0]
+    print(f"Total rows found: {len(all_rows)}")
 
-                    # শিটে ডাটা রাইট করা
-                    sheet.update_cell(i, 1, raw_title)  # A: Name
-                    sheet.update_cell(i, 4, image_url)  # D: Image URL
-                    sheet.update_cell(i, 5, board_name) # E: Board
-                    sheet.update_cell(i, 6, "Ready")     # F: Status
-                    sheet.update_cell(i, 9, short_title) # I: Short Title
-                    
-                    print(f"সারি {i} সফল!")
-                    time.sleep(1)
-                except Exception as e:
-                    print(f"জেমিনি এরর: {e}")
-            else:
-                print(f"সারি {i}: লিঙ্ক থেকে তথ্য পাওয়া যায়নি।")
+    # সারি নম্বর ২ থেকে শেষ পর্যন্ত লুপ চলবে
+    for i, row in enumerate(all_rows[1:], start=2):
+        # কলাম C (index 2) তে যদি আমাজন লিঙ্ক থাকে, তবেই কাজ করবে
+        if len(row) > 2 and "amazon.com" in row[2].lower():
+            product_link = row[2].strip()
+            print(f"--- Processing Row {i}: {product_link} ---")
+            
+            try:
+                # জেমিনিকে দিয়ে ডাটা তৈরি
+                prompt = f"""
+                Analyze this Amazon product: {product_link}
+                Provide exactly in this format:
+                Name: [Product Full Name]
+                Title: [Short Title, max 50 chars]
+                Image: [Main Product Image URL]
+                Board: [Pick one from {BOARDS}]
+                """
+                
+                response = model.generate_content(prompt)
+                res_text = response.text
+                
+                # সহজভাবে ডাটা এক্সট্রাক্ট করা
+                lines = res_text.split('\n')
+                p_name = next((l.split('Name:')[1] for l in lines if 'Name:' in l), "N/A").strip()
+                p_title = next((l.split('Title:')[1] for l in lines if 'Title:' in l), "N/A").strip()
+                p_image = next((l.split('Image:')[1] for l in lines if 'Image:' in l), "N/A").strip()
+                p_board = next((l.split('Board:')[1] for l in lines if 'Board:' in l), "N/A").strip()
+
+                # সরাসরি শিট আপডেট (একদম নির্দিষ্ট কলামে)
+                sheet.update_cell(i, 1, p_name)   # A: Product Name
+                sheet.update_cell(i, 4, p_image)  # D: Image URL
+                sheet.update_cell(i, 5, p_board)  # E: Board Name
+                sheet.update_cell(i, 6, "Done")   # F: Post Status
+                sheet.update_cell(i, 9, p_title)  # I: Short Title
+                
+                print(f"Row {i} successfully updated in Google Sheet!")
+                time.sleep(2) # কোটা বাঁচানোর জন্য ছোট বিরতি
+                
+            except Exception as e:
+                print(f"Error processing row {i}: {e}")
+        else:
+            print(f"Row {i} skipped: No valid Amazon link in Column C.")
 
 if __name__ == "__main__":
     process_data()
