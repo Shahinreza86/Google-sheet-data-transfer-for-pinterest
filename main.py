@@ -1,94 +1,160 @@
+import requests
+from bs4 import BeautifulSoup
+import json
+import random
+import re
+import time
+import os
+from datetime import datetime
+
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import google.generativeai as genai
-import os
-import json
-import time
-import requests
-from bs4 import BeautifulSoup
 
-# ১. গুগল শিট ও জেমিনি সেটআপ
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
-
+# =========================
+# ১. কনফিগারেশন (GitHub Secrets ব্যবহার করা ভালো)
+# =========================
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
 SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0"
-sheet = client.open_by_key(SHEET_ID).sheet1
 
-# জেমিনি সেটআপ - আপনার তালিকাভুক্ত 'Gemini Flash-Lite Latest'
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel('gemini-flash-lite-latest')
-
-BOARDS = [
-    "Modern Kitchen Gadgets & Smart Tools",
-    "DIY Home Improvement & Life Hacks",
-    "Smart Living Solutions & Home Tech",
-    "Aesthetic Kitchen Decor & Interior Ideas",
-    "Smart Home Organization & Storage Ideas"
+BOARD_NAMES = [
+    "Smart Home Organization",
+    "Kitchen Storage Ideas",
+    "Modern Kitchen Gadgets",
+    "Pantry Organization",
+    "Kitchen Cleaning Hacks"
 ]
 
-def get_amazon_details_perfectly(url):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/"
-    }
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # টাইটেল স্ক্র্যাপিং (আমাজনের আসল নাম)
-            title_tag = soup.find("span", {"id": "productTitle"})
-            actual_name = title_tag.get_text().strip() if title_tag else "N/A"
-            
-            # ইমেজ স্ক্র্যাপিং (সবচেয়ে বড় ছবি)
-            img_tag = soup.find('img', {'id': 'landingImage'})
-            image_url = "N/A"
-            if img_tag and img_tag.get('data-a-dynamic-image'):
-                image_url = list(json.loads(img_tag.get('data-a-dynamic-image')).keys())[-1]
-            elif img_tag:
-                image_url = img_tag.get('src')
-                
-            return actual_name, image_url
-    except Exception as e:
-        print(f"Scraping Error: {e}")
-    return "N/A", "N/A"
+AMAZON_URLS = [
+    "https://www.amazon.com/s?k=home+and+kitchen+organization",
+    "https://www.amazon.com/s?k=smart+home+storage+solutions",
+    "https://www.amazon.com/s?k=aesthetic+kitchen+gadgets"
+]
 
-def process_data():
-    all_rows = sheet.get_all_values()
-    print(f"Total rows: {len(all_rows)}")
+# আমাজন ব্লক এড়াতে শক্তিশালী হেডার
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9"
+}
+
+# =========================
+# ২. সেটআপ (Gemini & Google Sheet)
+# =========================
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-flash-lite-latest") # আপনি চাইলে gemini-flash-lite-latest ও দিতে পারেন
+
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+# service_account.json ফাইলটি আপনার রুটে থাকতে হবে
+creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
+client = gspread.authorize(creds)
+sheet = client.open_by_key(SHEET_ID).sheet1
+
+# =========================
+# ৩. আমাজন স্ক্র্যাপার (উন্নত ভার্সন)
+# =========================
+def get_high_res_image(item):
+    """আইটেম থেকে সবচাইতে বড় ছবির লিঙ্ক বের করার লজিক"""
+    img_tag = item.select_one("img")
+    if not img_tag: return "N/A"
     
-    for i, row in enumerate(all_rows[1:], start=2):
-        # যদি প্রোডাক্ট লিঙ্ক থাকে এবং কলাম A (প্রোডাক্ট নাম) খালি থাকে
-        if len(row) > 2 and "amazon" in row[2].lower() and (len(row) < 1 or not row[0].strip() or row[3] == "N/A"):
-            product_link = row[2].strip()
-            print(f"--- সারি {i} ঠিক করা হচ্ছে ---")
-            
-            # সরাসরি আমাজন থেকে আসল নাম এবং ইমেজ সংগ্রহ
-            amazon_name, actual_image_url = get_amazon_details_perfectly(product_link)
-            
-            try:
-                # জেমিনিকে শুধু বোর্ড আর শর্ট টাইটেল বানাতে বলা হচ্ছে
-                prompt = f"Product: {amazon_name}. Task: 1. Create a Short Pinterest Title. 2. Select one board from {BOARDS}. Format: SHORT_TITLE: | BOARD:"
-                response = model.generate_content(prompt)
-                lines = response.text.split('\n')
-                
-                short_title = next((l.split('SHORT_TITLE:')[1] for l in lines if 'SHORT_TITLE:' in l), "Awesome Product").strip()
-                selected_board = next((l.split('BOARD:')[1] for l in lines if 'BOARD:' in l), BOARDS[0]).strip()
+    # আমাজনের ডায়নামিক ইমেজ ডিকশনারি চেক করা
+    if img_tag.has_attr('data-a-dynamic-image'):
+        try:
+            img_dict = json.loads(img_tag['data-a-dynamic-image'])
+            return list(img_dict.keys())[-1] # সবচাইতে বড় রেজোলিউশন
+        except:
+            return img_tag.get('src', 'N/A')
+    return img_tag.get('src', 'N/A')
 
-                # শিটে ডাটা এন্ট্রি - আপনার ছবি অনুযায়ী কলাম সাজানো
-                sheet.update_cell(i, 1, amazon_name)      # Column A (Original Amazon Name)
-                sheet.update_cell(i, 4, actual_image_url) # Column D (Direct Image Link)
-                sheet.update_cell(i, 5, selected_board)   # Column E (Board)
-                sheet.update_cell(i, 6, "Ready")          # Column F (Status)
-                sheet.update_cell(i, 9, short_title)      # Column I (Short Title)
+def scrape_amazon():
+    all_products = []
+    for url in AMAZON_URLS:
+        try:
+            print(f"Scraping: {url}")
+            response = requests.get(url, headers=HEADERS, timeout=30)
+            if response.status_code != 200: continue
+            
+            soup = BeautifulSoup(response.text, "lxml")
+            products = soup.select('[data-component-type="s-search-result"]')
+            
+            for item in products[:7]: # প্রতি লিঙ্ক থেকে ৭টি করে প্রোডাক্ট
+                title_tag = item.select_one("h2 a span")
+                link_tag = item.select_one("h2 a")
                 
-                print(f"সারি {i} সফলভাবে আপডেট হয়েছে।")
-                time.sleep(2) # আমাজন ব্লক এড়াতে গ্যাপ
-            except Exception as e:
-                print(f"সারি {i} এ জেমিনি সমস্যা: {e}")
+                if title_tag and link_tag:
+                    title = title_tag.text.strip()
+                    link = "https://www.amazon.com" + link_tag['href']
+                    image = get_high_res_image(item)
+                    
+                    if image != "N/A":
+                        all_products.append({"title": title, "link": link, "image": image})
+            time.sleep(2) # আমাজন ব্লক এড়াতে গ্যাপ
+        except Exception as e:
+            print(f"Error: {e}")
+    return all_products
+
+# =========================
+# ৪. জেমিনি এআই প্রসেসিং
+# =========================
+def get_ai_metadata(title):
+    prompt = f"""
+    Product Name: {title}
+    Available Boards: {BOARD_NAMES}
+    
+    Task: 
+    1. Select the most relevant board.
+    2. Write a short, catchy Pinterest title (max 50 chars).
+    
+    Return ONLY JSON format:
+    {{
+      "board": "Selected Board Name",
+      "short_title": "Short Title Here"
+    }}
+    """
+    try:
+        response = model.generate_content(prompt)
+        # JSON ক্লিনআপ
+        clean_text = response.text.replace("```json", "").replace("
+```", "").strip()
+        data = json.loads(clean_text)
+        return data
+    except Exception as e:
+        print(f"AI Error: {e}")
+        return {"board": BOARD_NAMES[0], "short_title": title[:45]}
+
+# =========================
+# ৫. মূল প্রসেস
+# =========================
+def run_automation():
+    print("Starting Scraper...")
+    products = scrape_amazon()
+    print(f"Found {len(products)} products.")
+    
+    for p in products:
+        # ডুপ্লিকেট চেক (লিঙ্ক দিয়ে)
+        existing_links = sheet.col_values(3)
+        if p['link'] in existing_links:
+            print(f"Skipping Duplicate: {p['title'][:30]}")
+            continue
+            
+        ai_data = get_ai_metadata(p['title'])
+        
+        # শিট কলাম অনুযায়ী ডাটা সাজানো (A to I)
+        row = [
+            p['title'],                   # A: Product Name
+            "Kitchen & Home",             # B: Category
+            p['link'],                    # C: Product Link
+            p['image'],                   # D: Image URL
+            ai_data['board'],             # E: Board Name
+            "Ready",                      # F: Post Status
+            "Homeowners",                 # G: Target Audience
+            datetime.now().strftime("%Y-%m-%d"), # H: Date
+            ai_data['short_title']        # I: Short Title
+        ]
+        
+        sheet.append_row(row)
+        print(f"Successfully Added: {ai_data['short_title']}")
+        time.sleep(1) # API লিমিট এড়াতে
 
 if __name__ == "__main__":
-    process_data()
+    run_automation()
