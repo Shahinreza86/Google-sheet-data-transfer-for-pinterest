@@ -4,9 +4,8 @@ import google.generativeai as genai
 import os
 import json
 import time
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
+import requests
+from bs4 import BeautifulSoup
 
 # ১. গুগল শিট ও জেমিনি সেটআপ
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -22,7 +21,7 @@ SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0"
 sheet = client.open_by_key(SHEET_ID).sheet1
 
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel('gemini-1.5-flash') # ফ্ল্যাশ মডেল ব্যবহার করা হয়েছে দ্রুত রেজাল্টের জন্য
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 BOARDS = [
     "Modern Kitchen Gadgets & Smart Tools",
@@ -32,76 +31,65 @@ BOARDS = [
     "Smart Home Organization & Storage Ideas"
 ]
 
-# ২. সেলেনিয়াম ব্রাউজার সেটআপ (Headless Mode)
-chrome_options = Options()
-chrome_options.add_argument("--headless")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-driver = webdriver.Chrome(options=chrome_options)
-
-def get_amazon_image(url):
+def get_amazon_data(url):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
+    }
     try:
-        driver.get(url)
-        time.sleep(3) # পেজ লোড হতে সময় দিন
-        # অ্যামাজনের ছবির মূল সোর্স আইডি 'landingImage' অথবা 'main-image' থাকে
-        img_element = driver.find_element(By.ID, "landingImage")
-        return img_element.get_attribute("src")
+        response = requests.get(url, headers=headers, timeout=20)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            # ইমেজ লিঙ্ক খোঁজা (আপনার সেই 'রাইট ক্লিক' করা ইমেজের মতো)
+            img_tag = soup.find('img', {'id': 'landingImage'}) or soup.find('img', {'id': 'imgBlkFront'})
+            image_url = "N/A"
+            if img_tag:
+                if img_tag.get('data-a-dynamic-image'):
+                    # হাই-রেজোলিউশন ইমেজ বের করা
+                    image_url = list(json.loads(img_tag.get('data-a-dynamic-image')).keys())[-1]
+                else:
+                    image_url = img_tag.get('src')
+            return image_url
     except:
-        return "N/A"
+        pass
+    return "N/A"
 
 def process_data():
     all_rows = sheet.get_all_values()
+    print(f"Total rows found: {len(all_rows)}")
     
     for i, row in enumerate(all_rows[1:], start=2):
-        # কলাম C-তে লিঙ্ক আছে কিনা এবং কলাম A ফাঁকা কিনা চেক করবে
         if len(row) > 2 and "amazon.com" in row[2].lower():
+            # যদি কলাম A ফাঁকা থাকে তবেই কাজ করবে
             if len(row) < 1 or not row[0].strip():
                 product_link = row[2].strip()
                 print(f"--- সারি {i} প্রসেস হচ্ছে ---")
                 
-                # ক. সেলেনিয়াম দিয়ে ইমেজ লিঙ্ক সংগ্রহ
-                actual_image_url = get_amazon_image(product_link)
+                # ক. ইমেজ লিঙ্ক সংগ্রহ
+                actual_image_url = get_amazon_data(product_link)
                 
-                # খ. জেমিনি দিয়ে ডাটা এনালাইসিস
+                # খ. জেমিনি দিয়ে ডাটা এনালাইসিস
                 try:
-                    prompt = f"""
-                    Analyze this Amazon product link: {product_link}
-                    Provide information for my Pinterest automation.
-                    
-                    Select ONE board from this list: {BOARDS}
-                    
-                    Format your response exactly like this:
-                    NAME: [Full Detailed Product Name]
-                    TITLE: [Short Catchy Title for Pinterest]
-                    BOARD: [The selected board name]
-                    """
-                    
+                    prompt = f"Analyze this Amazon product link: {product_link}. Select ONE board from {BOARDS}. Provide: NAME: [Full Name], TITLE: [Catchy Title], BOARD: [Selected Board]"
                     response = model.generate_content(prompt)
                     lines = response.text.split('\n')
                     
-                    p_name = next((l.split('NAME:')[1] for l in lines if 'NAME:' in l), "N/A").strip()
-                    p_title = next((l.split('TITLE:')[1] for l in lines if 'TITLE:' in l), "N/A").strip()
-                    p_board = next((l.split('BOARD:')[1] for l in lines if 'BOARD:' in l), "N/A").strip()
+                    p_name = next((l.split('NAME:')[1] for l in lines if 'NAME:' in l), "Product").strip()
+                    p_title = next((l.split('TITLE:')[1] for l in lines if 'TITLE:' in l), "Cool Item").strip()
+                    p_board = next((l.split('BOARD:')[1] for l in lines if 'BOARD:' in l), BOARDS[0]).strip()
 
-                    # গ. গুগল শিট আপডেট (আপনার স্ক্রিনশট কলাম অনুযায়ী)
-                    updates = [
-                        {'range': f'A{i}', 'values': [[p_name]]},    # Product Name
-                        {'range': f'D{i}', 'values': [[actual_image_url]]}, # Image URL
-                        {'range': f'E{i}', 'values': [[p_board]]},   # Board Name
-                        {'range': f'F{i}', 'values': [["Ready"]]},   # Post Status
-                        {'range': f'I{i}', 'values': [[p_title]]}    # Short Title
-                    ]
+                    # গ. শিট আপডেট
+                    sheet.update_cell(i, 1, p_name)      # A
+                    sheet.update_cell(i, 4, actual_image_url) # D
+                    sheet.update_cell(i, 5, p_board)     # E
+                    sheet.update_cell(i, 6, "Ready")     # F
+                    sheet.update_cell(i, 9, p_title)     # I
                     
-                    for update in updates:
-                        sheet.update(update['range'], update['values'])
-                    
-                    print(f"সারি {i} সফলভাবে সম্পন্ন হয়েছে।")
-                    time.sleep(1) # API রেট লিমিট এড়াতে
+                    print(f"সারি {i} সফলভাবে আপডেট হয়েছে।")
+                    time.sleep(2)
 
                 except Exception as e:
-                    print(f"সারি {i} এ সমস্যা হয়েছে: {e}")
-
-    driver.quit()
+                    print(f"সারি {i} এ জেমিনি সমস্যা: {e}")
 
 if __name__ == "__main__":
     process_data()
