@@ -113,9 +113,9 @@ def get_ai_metadata(title):
     """
     try:
         response = model.generate_content(prompt)
-        # JSON ক্লিনআপ
-        clean_text = response.text.replace("```json", "").replace("
-```", "").strip()
+        # JSON ক্লিনআপ করার সঠিক লজিক
+        raw_text = response.text.strip()
+        clean_text = raw_text.replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_text)
         return data
     except Exception as e:
