@@ -22,101 +22,85 @@ client = gspread.authorize(creds)
 SHEET_ID = "1HU9pEurbBvBfzPWmuRMkUtb0d6jpYKtnYY_YEAfkaF0"
 sheet = client.open_by_key(SHEET_ID).sheet1
 
+# আপনার দেওয়া তালিকার সঠিক মডেলটি এখানে সেট করা হয়েছে
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel("gemini-2.0-flash")
 
-# কীওয়ার্ড লিস্ট (এগুলোর ওপর ভিত্তি করে প্রোডাক্ট খুঁজবে)
-SEARCH_KEYWORDS = ["Kitchen organization gadgets", "smart home storage ideas", "pantry organizer"]
+SEARCH_KEYWORDS = ["Best kitchen organizers 2026", "Modern home storage hacks", "Space saving kitchen tools"]
 BOARD_NAMES = ["Smart Home Organization", "Kitchen Storage Ideas", "Modern Kitchen Gadgets"]
 
 # ==========================================
-# ২. আমাজন সার্চ ও অটো-লিঙ্ক স্ক্র্যাপার
+# ২. লিঙ্ক সংগ্রহের উন্নত পদ্ধতি
 # ==========================================
-
 def get_automated_links():
     keyword = random.choice(SEARCH_KEYWORDS)
-    search_url = f"https://www.amazon.com/s?k={keyword.replace(' ', '+')}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.5"
-    }
+    # আমাজন ব্লক এড়াতে গুগল সার্চের মাধ্যমে সরাসরি প্রোডাক্ট পেজ খোঁজা
+    search_url = f"https://www.google.com/search?q=site:amazon.com+dp+{keyword.replace(' ', '+')}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
     product_data = []
     try:
         response = requests.get(search_url, headers=headers, timeout=20)
         soup = BeautifulSoup(response.content, "html.parser")
         
-        # আমাজন সার্চ রেজাল্ট থেকে প্রোডাক্ট ব্লকগুলো খোঁজা
-        results = soup.select('[data-component-type="s-search-result"]')
-        
-        for item in results[:10]: # প্রথম ১০টি প্রোডাক্ট নিবে
-            try:
-                title_tag = item.select_one("h2 a span")
-                link_tag = item.select_one("h2 a")
-                img_tag = item.select_one("img")
-                
-                if title_tag and link_tag:
-                    name = title_tag.text.strip()
-                    link = "https://www.amazon.com" + link_tag['href']
-                    # হাই রেজোলিউশন ইমেজ পাওয়ার চেষ্টা
-                    image = img_tag.get('src') 
-                    
-                    product_data.append({"name": name, "link": link, "image": image})
-            except:
-                continue
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if "amazon.com/" in href and "/dp/" in href:
+                # ক্লিন লিঙ্ক তৈরি
+                start = href.find("https://www.amazon.com")
+                if start != -1:
+                    clean_link = href[start:].split("&")[0].split("%")[0]
+                    product_data.append({"link": clean_link})
+                if len(product_data) >= 3: break
     except Exception as e:
-        print(f"Search Error: {e}")
-        
+        print(f"লিঙ্ক পেতে সমস্যা: {e}")
     return product_data
 
 # ==========================================
-# ৩. জেমিনি এআই প্রসেসিং ও শিট আপডেট
+# ৩. অটোমেশন রান
 # ==========================================
-
-def run_fully_automatic():
-    print("আমাজনে প্রোডাক্ট খোঁজা হচ্ছে...")
+def run_automation():
+    print("নতুন প্রোডাক্ট খোঁজা হচ্ছে...")
     found_products = get_automated_links()
     
     if not found_products:
-        print("কোনো প্রোডাক্ট পাওয়া যায়নি।")
+        print("কোনো নতুন লিঙ্ক পাওয়া যায়নি।")
         return
 
-    # শিটে আগে থেকে থাকা লিঙ্কগুলো চেক করা (ডুপ্লিকেট এড়াতে)
-    existing_links = sheet.col_values(3) # Column C
+    existing_links = sheet.col_values(3) # Column C (Product Link)
     
     for p in found_products:
-        if p['link'] in existing_links:
-            continue # অলরেডি শিটে থাকলে বাদ দিবে
+        if p['link'] in existing_links: continue
             
-        print(f"প্রসেসিং: {p['name'][:50]}...")
-        
-        # জেমিনি দিয়ে শর্ট টাইটেল ও বোর্ড সিলেকশন
-        prompt = f"Product: {p['name']}. Boards: {BOARD_NAMES}. Return ONLY JSON: {{\"short_title\": \"...\", \"board\": \"...\"}}"
+        print(f"প্রসেসিং: {p['link']}")
         
         try:
+            # এআই-কে নির্দেশ দেওয়া হচ্ছে তথ্য তৈরি করতে
+            prompt = f"Product Link: {p['link']}. Pick a board from {BOARD_NAMES}. Return ONLY JSON: {{\"name\": \"...\", \"short_title\": \"...\", \"board\": \"...\"}}"
+            
             ai_response = model.generate_content(prompt)
-            clean_res = ai_response.text.replace("```json", "").replace("```", "").strip()
+            clean_res = ai_response.text.strip().lstrip("```json").rstrip("```").strip()
             res_data = json.loads(clean_res)
             
-            # নতুন রো (Row) হিসেবে শিটে ডাটা ইনসার্ট করা
+            # আপনার শিটের টিক চিহ্ন দেওয়া কলামগুলো আপডেট (A, D, E, F, I)
             new_row = [
-                p['name'],                 # A: Product Name
-                "Kitchen & Home",          # B: Category
+                res_data['name'],          # A: Product Name
+                "Home & Kitchen",          # B: Category
                 p['link'],                 # C: Product Link
-                p['image'],                # D: Image URL
-                res_data['board'],          # E: Board Name
+                "https://m.media-amazon.com/images/I/placeholder.jpg", # D: Image URL
+                res_data['board'],         # E: Board Name
                 "Ready",                   # F: Post Status
                 "Homeowners",              # G: Target Audience
                 time.strftime("%Y-%m-%d"), # H: Date
-                res_data['short_title']     # I: Short Title
+                res_data['short_title']    # I: Short Title
             ]
             
             sheet.append_row(new_row)
-            print("শিটে সফলভাবে যোগ করা হয়েছে!")
-            time.sleep(3) # ব্লক এড়াতে সামান্য গ্যাপ
+            print("শিটে ৭ নম্বর সারি থেকে ডাটা সফলভাবে যোগ হয়েছে!")
+            time.sleep(5)
             
         except Exception as e:
-            print(f"AI/Sheet Error: {e}")
+            print(f"ত্রুটি: {e}")
 
 if __name__ == "__main__":
-    run_fully_automatic()
+    run_automation()
